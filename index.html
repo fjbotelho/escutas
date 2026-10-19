@@ -1,0 +1,450 @@
+<!doctype html>
+<html lang="pt-PT">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f1b2d">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<title>Log de Escutas</title>
+<style>
+  :root{
+    --bg:#0f1b2d; --card:#16263d; --line:#2a3f5e; --txt:#e8eef7; --mut:#8fa3bf;
+    --acc:#3fb6ff; --ok:#3ecf8e; --bad:#ff6b6b;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--txt);
+    font:16px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  body{padding:12px 14px calc(40px + env(safe-area-inset-bottom))}
+  h1{font-size:1.2rem;margin:4px 0 12px;display:flex;justify-content:space-between;align-items:center}
+  h1 small{font-weight:400;color:var(--mut);font-size:.8rem}
+  h2{font-size:1rem;margin:22px 0 8px;color:var(--mut);text-transform:uppercase;letter-spacing:.05em}
+  form,.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px}
+  label{display:block;font-size:.8rem;color:var(--mut);margin:10px 0 4px}
+  label:first-child{margin-top:0}
+  input,select,textarea{width:100%;background:#0c1626;color:var(--txt);border:1px solid var(--line);
+    border-radius:10px;padding:12px;font-size:16px;font-family:inherit}
+  input:focus,textarea:focus{outline:2px solid var(--acc);border-color:transparent}
+  textarea{min-height:70px;resize:vertical}
+  .row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .row3{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end}
+  button{font:inherit;border:0;border-radius:10px;padding:12px 16px;cursor:pointer;color:#06121f;
+    background:var(--acc);font-weight:600}
+  button.sec{background:#243a58;color:var(--txt);font-weight:500}
+  button.bad{background:transparent;color:var(--bad);padding:6px 10px;font-weight:500}
+  .actions{display:flex;gap:10px;margin-top:16px}
+  .actions button{flex:1}
+  .big{font-size:1.15rem;font-weight:600}
+  .list{display:flex;flex-direction:column;gap:8px}
+  .item{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 12px;
+    display:flex;gap:10px;align-items:center}
+  .item .main{flex:1;min-width:0;cursor:pointer}
+  .item .l1{font-weight:600}
+  .item .l2{color:var(--mut);font-size:.85rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .tools{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+  .tools button{flex:1 1 40%}
+  .hint{color:var(--mut);font-size:.8rem;margin-top:6px}
+  #toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom));transform:translateX(-50%);
+    background:#0b3d2a;color:#d6ffe9;border:1px solid var(--ok);padding:10px 16px;border-radius:999px;
+    opacity:0;pointer-events:none;transition:opacity .2s;max-width:90vw;text-align:center}
+  #toast.show{opacity:1}
+  #toast.err{background:#4a1616;color:#ffe0e0;border-color:var(--bad)}
+  #editbar{display:none;background:#3a2f0b;border:1px solid #b8922a;color:#ffe9a8;border-radius:10px;
+    padding:8px 12px;margin-bottom:10px;font-size:.9rem}
+</style>
+</head>
+<body>
+
+<h1>Log de Escutas <small id="count"></small></h1>
+
+<div id="editbar">A editar um registo existente.</div>
+
+<form id="form" autocomplete="off">
+  <label for="freq">Frequência (kHz) *</label>
+  <input id="freq" class="big" inputmode="decimal" placeholder="ex.: 6070 ou 9615.5" required>
+
+  <div class="row3">
+    <div class="row" style="margin:0">
+      <div>
+        <label for="data">Data UTC (AAAAMMDD)</label>
+        <input id="data" inputmode="numeric" maxlength="8" placeholder="20261019">
+      </div>
+      <div>
+        <label for="hora">Hora UTC (HHMM)</label>
+        <input id="hora" inputmode="numeric" maxlength="4" placeholder="1255">
+      </div>
+    </div>
+    <button type="button" class="sec" id="btnAgora">Agora</button>
+  </div>
+
+  <div class="row">
+    <div>
+      <label for="modo">Modo</label>
+      <input id="modo" list="modos" placeholder="AM, USB, LSB, CW…">
+      <datalist id="modos">
+        <option value="AM"><option value="USB"><option value="LSB"><option value="CW">
+        <option value="FM"><option value="SAM"><option value="ECSS"><option value="DRM">
+      </datalist>
+    </div>
+    <div>
+      <label for="sinal">Sinal</label>
+      <input id="sinal" list="smeter" autocapitalize="characters" placeholder="ex.: S9+10">
+      <datalist id="smeter">
+        <option value="S1"><option value="S2"><option value="S3"><option value="S4">
+        <option value="S5"><option value="S6"><option value="S7"><option value="S8">
+        <option value="S9"><option value="S9+10"><option value="S9+20"><option value="S9+30">
+        <option value="S9+40"><option value="S9+60">
+      </datalist>
+    </div>
+  </div>
+
+  <label for="estacao">Estação</label>
+  <input id="estacao" placeholder="ex.: Radio Romania Int.">
+
+  <div class="row">
+    <div>
+      <label for="sinfo">SINPO (1–5 cada)</label>
+      <input id="sinfo" inputmode="numeric" maxlength="5" placeholder="ex.: 43433">
+    </div>
+    <div>
+      <label for="lingua">Língua</label>
+      <input id="lingua" placeholder="ex.: Inglês">
+    </div>
+  </div>
+
+  <label for="observ">Observações</label>
+  <textarea id="observ"></textarea>
+
+  <label for="local">Local</label>
+  <input id="local" placeholder="ex.: Serra de Sintra">
+  <div class="row">
+    <div>
+      <label for="radio">Rádio</label>
+      <input id="radio">
+    </div>
+    <div>
+      <label for="antena">Antena</label>
+      <input id="antena">
+    </div>
+  </div>
+  <div class="hint">Local, rádio, antena e modo ficam memorizados para o registo seguinte.</div>
+
+  <div class="actions">
+    <button type="button" class="sec" id="btnCancel" style="display:none">Cancelar</button>
+    <button type="submit" id="btnSave">Guardar</button>
+  </div>
+</form>
+
+<h2>Registos</h2>
+<div class="list" id="list"></div>
+
+<h2>Exportar / cópia de segurança</h2>
+<div class="card">
+  <div class="tools">
+    <button type="button" id="btnShare">Partilhar CSV</button>
+    <button type="button" class="sec" id="btnDown">Descarregar CSV</button>
+    <button type="button" class="sec" id="btnImport">Importar CSV</button>
+    <button type="button" class="sec" id="btnClear">Apagar tudo</button>
+  </div>
+  <input type="file" id="fileImport" accept=".csv,text/csv" style="display:none">
+  <div class="hint">Exporta com regularidade: se limpares os dados do Chrome, os registos guardados no telemóvel perdem-se.</div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+'use strict';
+/* ---------- utilitários ---------- */
+const $ = id => document.getElementById(id);
+const FIELDS = ['freq_hz','local','radio','antena','data','hora','modo','sinal','estacao','sinfo','lingua','observ'];
+const TEXT_INPUTS = ['local','radio','antena','modo','sinal','estacao','sinfo','lingua','observ'];
+const REMEMBER = ['local','radio','antena','modo'];
+
+let editingId = null;
+let autoTime = true;
+let toastTimer;
+
+function toast(msg, err){
+  const t = $('toast');
+  t.textContent = msg;
+  t.className = 'show' + (err ? ' err' : '');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.className = '', 2200);
+}
+
+function utcNow(){
+  const d = new Date();
+  const p = (n, l = 2) => String(n).padStart(l, '0');
+  return {
+    data: p(d.getUTCFullYear(), 4) + p(d.getUTCMonth() + 1) + p(d.getUTCDate()),
+    hora: p(d.getUTCHours()) + p(d.getUTCMinutes())
+  };
+}
+
+function setNow(){
+  const n = utcNow();
+  $('data').value = n.data;
+  $('hora').value = n.hora;
+}
+
+function khzToHz(s){
+  const k = parseFloat(String(s).trim().replace(',', '.'));
+  if (!isFinite(k) || k <= 0) return null;
+  return Math.round(k * 1000);
+}
+function hzToKhz(hz){
+  return String(Math.round(hz) / 1000);
+}
+
+function validDate(s){
+  if (!/^\d{8}$/.test(s)) return false;
+  const y = +s.slice(0,4), m = +s.slice(4,6), d = +s.slice(6,8);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
+}
+function validTime(s){ return /^([01]\d|2[0-3])[0-5]\d$/.test(s); }
+
+/* ---------- IndexedDB ---------- */
+const DB_NAME = 'log_escutas', STORE = 'escutas';
+let dbp;
+function db(){
+  if (!dbp) dbp = new Promise((res, rej) => {
+    const r = indexedDB.open(DB_NAME, 1);
+    r.onupgradeneeded = () => r.result.createObjectStore(STORE, { keyPath: 'id', autoIncrement: true });
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+  return dbp;
+}
+async function tx(mode, fn){
+  const d = await db();
+  return new Promise((res, rej) => {
+    const t = d.transaction(STORE, mode);
+    const out = fn(t.objectStore(STORE));
+    t.oncomplete = () => res(out && out.result !== undefined ? out.result : undefined);
+    t.onerror = () => rej(t.error);
+    t.onabort = () => rej(t.error);
+  });
+}
+const dbAll   = () => tx('readonly',  s => s.getAll());
+const dbPut   = o  => tx('readwrite', s => s.put(o));
+const dbDel   = id => tx('readwrite', s => s.delete(id));
+const dbClear = () => tx('readwrite', s => s.clear());
+
+/* ---------- CSV ---------- */
+function csvCell(v){
+  const s = (v === null || v === undefined) ? '' : String(v);
+  return /[",\r\n;]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+function sortRecs(recs){
+  return recs.slice().sort((a, b) =>
+    (a.data + a.hora).localeCompare(b.data + b.hora) || a.id - b.id);
+}
+function buildCsv(recs){
+  const lines = [FIELDS.join(',')];
+  for (const r of sortRecs(recs)) lines.push(FIELDS.map(f => csvCell(r[f])).join(','));
+  return lines.join('\r\n') + '\r\n';
+}
+function parseCsv(t){
+  if (t.charCodeAt(0) === 0xFEFF) t = t.slice(1);
+  const rows = []; let row = [], f = '', q = false;
+  for (let i = 0; i < t.length; i++){
+    const c = t[i];
+    if (q){
+      if (c === '"'){ if (t[i+1] === '"'){ f += '"'; i++; } else q = false; }
+      else f += c;
+    } else if (c === '"') q = true;
+    else if (c === ',') { row.push(f); f = ''; }
+    else if (c === '\n' || c === '\r'){
+      if (c === '\r' && t[i+1] === '\n') i++;
+      row.push(f); f = ''; rows.push(row); row = [];
+    } else f += c;
+  }
+  if (f !== '' || row.length){ row.push(f); rows.push(row); }
+  return rows.filter(r => r.length > 1 || (r[0] || '').trim() !== '');
+}
+function csvFilename(){
+  const n = utcNow();
+  return 'escutas_' + n.data + '_' + n.hora + '.csv';
+}
+async function makeCsvFile(){
+  const recs = await dbAll();
+  if (!recs.length){ toast('Não há registos para exportar.', true); return null; }
+  return new File([buildCsv(recs)], csvFilename(), { type: 'text/csv' });
+}
+
+/* ---------- formulário ---------- */
+function loadRemembered(){
+  try {
+    const m = JSON.parse(localStorage.getItem('lembrar') || '{}');
+    for (const k of REMEMBER) if (m[k] !== undefined) $(k).value = m[k];
+  } catch (e) {}
+}
+function saveRemembered(){
+  try {
+    const m = {};
+    for (const k of REMEMBER) m[k] = $(k).value;
+    localStorage.setItem('lembrar', JSON.stringify(m));
+  } catch (e) {}
+}
+
+function resetForm(){
+  editingId = null;
+  $('editbar').style.display = 'none';
+  $('btnCancel').style.display = 'none';
+  $('btnSave').textContent = 'Guardar';
+  for (const k of ['freq', 'sinal', 'estacao', 'sinfo', 'lingua', 'observ']) $(k).value = '';
+  loadRemembered();
+  autoTime = true;
+  setNow();
+}
+
+function fillForm(r){
+  editingId = r.id;
+  $('freq').value = hzToKhz(r.freq_hz);
+  for (const k of TEXT_INPUTS) $(k).value = r[k] || '';
+  $('data').value = r.data || '';
+  $('hora').value = r.hora || '';
+  autoTime = false;
+  $('editbar').style.display = 'block';
+  $('btnCancel').style.display = '';
+  $('btnSave').textContent = 'Atualizar';
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+async function onSubmit(e){
+  e.preventDefault();
+  const hz = khzToHz($('freq').value);
+  if (hz === null) return toast('Frequência inválida.', true);
+  const data = $('data').value.trim(), hora = $('hora').value.trim();
+  if (!validDate(data)) return toast('Data inválida (AAAAMMDD).', true);
+  if (!validTime(hora)) return toast('Hora inválida (HHMM, 0000–2359).', true);
+  const sinpo = $('sinfo').value.trim();
+  if (sinpo && !/^[1-5]{5}$/.test(sinpo)) return toast('SINPO inválido: 5 dígitos de 1 a 5 (ex.: 43433).', true);
+
+  const rec = { freq_hz: hz, data, hora };
+  for (const k of TEXT_INPUTS) rec[k] = $(k).value.trim();
+  if (editingId !== null) rec.id = editingId;
+
+  try {
+    await dbPut(rec);
+  } catch (err) {
+    return toast('Erro ao guardar: ' + (err && err.message || err), true);
+  }
+  saveRemembered();
+  const wasEditing = editingId !== null;
+  resetForm();
+  await render();
+  toast(wasEditing ? 'Registo atualizado.' : 'Registo guardado.');
+  if (!wasEditing) $('freq').focus();
+}
+
+/* ---------- lista ---------- */
+async function render(){
+  const recs = sortRecs(await dbAll()).reverse();
+  $('count').textContent = recs.length + (recs.length === 1 ? ' registo' : ' registos');
+  const list = $('list');
+  list.textContent = '';
+  if (!recs.length){
+    const p = document.createElement('div');
+    p.className = 'hint';
+    p.textContent = 'Ainda sem registos.';
+    list.appendChild(p);
+    return;
+  }
+  for (const r of recs){
+    const item = document.createElement('div'); item.className = 'item';
+    const main = document.createElement('div'); main.className = 'main';
+    const l1 = document.createElement('div'); l1.className = 'l1';
+    l1.textContent = hzToKhz(r.freq_hz) + ' kHz' + (r.estacao ? ' · ' + r.estacao : '');
+    const l2 = document.createElement('div'); l2.className = 'l2';
+    l2.textContent = [r.data + ' ' + r.hora + 'z', r.modo, r.sinfo && 'SINPO ' + r.sinfo, r.sinal, r.lingua].filter(Boolean).join(' · ');
+    main.append(l1, l2);
+    main.onclick = () => fillForm(r);
+    const del = document.createElement('button');
+    del.className = 'bad'; del.type = 'button'; del.textContent = 'Apagar';
+    del.onclick = async () => {
+      if (!confirm('Apagar este registo?\n' + l1.textContent)) return;
+      await dbDel(r.id);
+      if (editingId === r.id) resetForm();
+      render();
+      toast('Registo apagado.');
+    };
+    item.append(main, del);
+    list.appendChild(item);
+  }
+}
+
+/* ---------- exportar / importar ---------- */
+async function descarregar(){
+  const f = await makeCsvFile(); if (!f) return;
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(f);
+  a.download = f.name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  toast('CSV descarregado.');
+}
+async function partilhar(){
+  const f = await makeCsvFile(); if (!f) return;
+  if (navigator.canShare && navigator.canShare({ files: [f] })){
+    try { await navigator.share({ files: [f], title: f.name }); }
+    catch (e) { /* cancelado pelo utilizador */ }
+  } else {
+    toast('Partilha não disponível; usa "Descarregar CSV".', true);
+  }
+}
+async function importar(file){
+  try {
+    const rows = parseCsv(await file.text());
+    if (rows.length < 2) return toast('Ficheiro sem dados.', true);
+    const head = rows[0].map(h => h.trim());
+    if (!head.includes('freq_hz')) return toast('Cabeçalho inválido (falta freq_hz).', true);
+    let n = 0, skip = 0;
+    for (const row of rows.slice(1)){
+      const o = {};
+      head.forEach((h, i) => { if (FIELDS.includes(h)) o[h] = (row[i] || '').trim(); });
+      const hz = parseInt(o.freq_hz, 10);
+      if (!(hz > 0) || !validDate(o.data || '') || !validTime(o.hora || '')){ skip++; continue; }
+      const rec = { freq_hz: hz };
+      for (const k of FIELDS.slice(1)) rec[k] = o[k] || '';
+      await dbPut(rec); n++;
+    }
+    await render();
+    toast(n + ' importados' + (skip ? ', ' + skip + ' ignorados' : '') + '.');
+  } catch (e) {
+    toast('Erro ao importar: ' + (e && e.message || e), true);
+  }
+}
+
+/* ---------- arranque ---------- */
+$('form').addEventListener('submit', onSubmit);
+$('btnAgora').onclick = () => { autoTime = true; setNow(); };
+$('btnCancel').onclick = resetForm;
+$('data').addEventListener('input', () => autoTime = false);
+$('hora').addEventListener('input', () => autoTime = false);
+$('btnDown').onclick = descarregar;
+$('btnShare').onclick = partilhar;
+$('btnImport').onclick = () => $('fileImport').click();
+$('fileImport').onchange = e => { if (e.target.files[0]) importar(e.target.files[0]); e.target.value = ''; };
+$('btnClear').onclick = async () => {
+  if (!confirm('Apagar TODOS os registos deste telemóvel?\nExporta primeiro um CSV!')) return;
+  if (!confirm('Tens a certeza? Esta ação não pode ser desfeita.')) return;
+  await dbClear(); resetForm(); render(); toast('Tudo apagado.');
+};
+
+setInterval(() => { if (autoTime && editingId === null) setNow(); }, 15000);
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && autoTime && editingId === null) setNow();
+});
+
+resetForm();
+render();
+
+if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+if ('serviceWorker' in navigator){
+  window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+}
+</script>
+</body>
+</html>
