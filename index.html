@@ -49,6 +49,23 @@
     opacity:0;pointer-events:none;transition:opacity .2s;max-width:90vw;text-align:center}
   #toast.show{opacity:1}
   #toast.err{background:#4a1616;color:#ffe0e0;border-color:var(--bad)}
+  details.pesq{margin:14px 0 4px;border:1px solid var(--line);border-radius:12px;background:#0c1626}
+  details.pesq>summary{padding:10px 12px;cursor:pointer;font-weight:600;list-style:none}
+  details.pesq>summary::-webkit-details-marker{display:none}
+  details.pesq>summary::after{content:"▾";float:right;color:var(--mut)}
+  .pesq .body{padding:0 10px 10px}
+  .pesq .opts{display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center;margin:4px 0 8px}
+  .pesq .opts label{display:flex;align-items:center;gap:6px;margin:0;font-size:.85rem}
+  .pesq .opts select{width:auto;padding:6px 8px;font-size:14px}
+  .pesq .opts input[type=checkbox]{width:auto}
+  .res{display:flex;flex-direction:column;gap:6px;max-height:46vh;overflow:auto}
+  .hit{border:1px solid var(--line);border-radius:10px;padding:8px 10px;background:var(--card);cursor:pointer}
+  .hit.on{border-color:var(--ok)}
+  .hit.off{opacity:.65}
+  .hit .h1{font-weight:600}
+  .hit .h2{color:var(--mut);font-size:.82rem}
+  .badge{font-size:.7rem;background:var(--ok);color:#04210f;border-radius:999px;padding:1px 8px;margin-left:6px;font-weight:700;vertical-align:1px}
+  .badge.u{background:#3a4a63;color:var(--txt)}
   #editbar{display:none;background:#3a2f0b;border:1px solid #b8922a;color:#ffe9a8;border-radius:10px;
     padding:8px 12px;margin-bottom:10px;font-size:.9rem}
 </style>
@@ -76,6 +93,31 @@
     </div>
     <button type="button" class="sec" id="btnAgora">Agora</button>
   </div>
+
+  <details class="pesq" id="pesq" open>
+    <summary>Quem emite nesta frequência?</summary>
+    <div class="body">
+      <div class="opts">
+        <label>Tolerância
+          <select id="pTol">
+            <option value="0">exata</option>
+            <option value="1000" selected>±1 kHz</option>
+            <option value="5000">±5 kHz</option>
+          </select>
+        </label>
+        <label><input type="checkbox" id="pAtivas"> só ativas</label>
+        <label><input type="checkbox" id="pUtil"> incluir dados/utilitárias</label>
+      </div>
+      <div class="hint" id="pMsg" style="margin:0 0 6px"></div>
+      <div class="res" id="pRes"></div>
+      <div class="tools">
+        <button type="button" class="sec" id="btnEst">Importar ficheiro de estações</button>
+      </div>
+      <div class="hint" id="pStatus"></div>
+      <input type="file" id="fileEst" style="display:none"
+             accept=".csv,text/csv,text/comma-separated-values,application/vnd.ms-excel,text/plain">
+    </div>
+  </details>
 
   <div class="row">
     <div>
@@ -143,7 +185,7 @@
   <div class="tools">
     <button type="button" id="btnShare">Partilhar CSV</button>
     <button type="button" class="sec" id="btnDown">Descarregar CSV</button>
-    <button type="button" class="sec" id="btnImport">Importar CSV</button>
+    <button type="button" class="sec" id="btnImport">Importar escutas (CSV)</button>
     <button type="button" class="sec" id="btnClear">Apagar tudo</button>
   </div>
   <input type="file" id="fileImport" accept=".csv,text/csv" style="display:none">
@@ -185,6 +227,7 @@ function setNow(){
   const n = utcNow();
   $('data').value = n.data;
   $('hora').value = n.hora;
+  agendarPesquisa();
 }
 
 function khzToHz(s){
@@ -205,22 +248,27 @@ function validDate(s){
 function validTime(s){ return /^([01]\d|2[0-3])[0-5]\d$/.test(s); }
 
 /* ---------- IndexedDB ---------- */
-const DB_NAME = 'log_escutas', STORE = 'escutas';
+const DB_NAME = 'log_escutas', STORE = 'escutas', EST = 'estacoes', META = 'meta';
 let dbp;
 function db(){
   if (!dbp) dbp = new Promise((res, rej) => {
-    const r = indexedDB.open(DB_NAME, 1);
-    r.onupgradeneeded = () => r.result.createObjectStore(STORE, { keyPath: 'id', autoIncrement: true });
+    const r = indexedDB.open(DB_NAME, 2);
+    r.onupgradeneeded = () => {
+      const d = r.result;
+      if (!d.objectStoreNames.contains(STORE)) d.createObjectStore(STORE, { keyPath: 'id', autoIncrement: true });
+      if (!d.objectStoreNames.contains(EST)) d.createObjectStore(EST);
+      if (!d.objectStoreNames.contains(META)) d.createObjectStore(META);
+    };
     r.onsuccess = () => res(r.result);
     r.onerror = () => rej(r.error);
   });
   return dbp;
 }
-async function tx(mode, fn){
+async function tx(mode, fn, store = STORE){
   const d = await db();
   return new Promise((res, rej) => {
-    const t = d.transaction(STORE, mode);
-    const out = fn(t.objectStore(STORE));
+    const t = d.transaction(store, mode);
+    const out = fn(t.objectStore(store));
     t.oncomplete = () => res(out && out.result !== undefined ? out.result : undefined);
     t.onerror = () => rej(t.error);
     t.onabort = () => rej(t.error);
@@ -416,6 +464,201 @@ async function importar(file){
     toast('Erro ao importar: ' + (e && e.message || e), true);
   }
 }
+
+/* ---------- pesquisa por frequência (base de estações) ----------
+   Registo compacto: [0 freq_hz, 1 estação, 2 dias, 3 língua, 4 início(min), 5 fim(min),
+                      6 itu, 7 target, 8 origem, 9 potência, 10 remarks]
+   Guardado em baldes de 1 kHz (chave = floor(freq_hz/1000)). */
+const DIAS = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom'];
+const MAX_HITS = 25;
+let tPesq, pesqSeq = 0, pesqTodas = false;
+
+function normHora(s){
+  s = String(s || '').trim();
+  if (!/^\d{1,4}$/.test(s)) return null;
+  s = s.padStart(4, '0');
+  if (s === '2400') return 1440;
+  const h = +s.slice(0, 2), m = +s.slice(2);
+  return (h < 24 && m < 60) ? h * 60 + m : null;
+}
+function normDias(s){
+  return [...new Set(String(s || '').match(/[1-7]/g) || [])].sort().join('');
+}
+function hhmm(min){
+  if (min >= 1440) return '2400';
+  return String(Math.floor(min / 60)).padStart(2, '0') + String(min % 60).padStart(2, '0');
+}
+function diaOk(dias, wd){ return dias === '' || dias.indexOf(String(wd)) >= 0; }
+function ativa(r, wd, t){
+  const s = r[4], e = r[5], dias = r[2];
+  if (s === e) return diaOk(dias, wd);
+  if (s < e) return t >= s && t < e && diaOk(dias, wd);
+  if (t >= s) return diaOk(dias, wd);                       // até à meia-noite
+  return t < e && diaOk(dias, wd === 1 ? 7 : wd - 1);       // depois da meia-noite: dia anterior
+}
+function diasTxt(d){
+  if (d === '' || d === '1234567') return 'diário';
+  const n = [...d].map(Number), out = [];
+  let i = 0;
+  while (i < n.length){
+    let j = i;
+    while (j + 1 < n.length && n[j + 1] === n[j] + 1) j++;
+    out.push(j - i >= 2 ? DIAS[n[i] - 1] + '–' + DIAS[n[j] - 1]
+                        : n.slice(i, j + 1).map(x => DIAS[x - 1]).join(' '));
+    i = j + 1;
+  }
+  return out.join(' ');
+}
+function isUtil(r){
+  const l = (r[3] || '').toUpperCase();
+  return l.startsWith('DATA') || l.startsWith('-');
+}
+function contextoTempo(){
+  const d = $('data').value.trim(), h = $('hora').value.trim();
+  if (!validDate(d) || !validTime(h)) return null;
+  const dt = new Date(Date.UTC(+d.slice(0, 4), +d.slice(4, 6) - 1, +d.slice(6, 8)));
+  return { wd: (dt.getUTCDay() + 6) % 7 + 1, t: +h.slice(0, 2) * 60 + +h.slice(2), h };
+}
+
+async function procurar(hz, tol){
+  const d = await db();
+  const lo = Math.floor((hz - tol) / 1000), hi = Math.floor((hz + tol) / 1000);
+  return new Promise((res, rej) => {
+    const rq = d.transaction(EST, 'readonly').objectStore(EST).getAll(IDBKeyRange.bound(lo, hi));
+    rq.onsuccess = () => res(rq.result.flat().filter(r => Math.abs(r[0] - hz) <= tol));
+    rq.onerror = () => rej(rq.error);
+  });
+}
+
+function agendarPesquisa(){ clearTimeout(tPesq); tPesq = setTimeout(pesquisar, 150); }
+
+function pMsg(t){ $('pMsg').textContent = t; }
+
+async function pesquisar(){
+  const seq = ++pesqSeq, box = $('pRes');
+  try {
+    const meta = await tx('readonly', s => s.get('info'), META);
+    if (seq !== pesqSeq) return;
+    $('pStatus').textContent = meta
+      ? 'Base: ' + meta.n.toLocaleString('pt-PT') + ' emissões · ' + meta.nome +
+        ' · importada em ' + new Date(meta.quando).toLocaleDateString('pt-PT')
+      : '';
+    box.textContent = '';
+    if (!meta) return pMsg('Ainda não importaste o ficheiro de estações. Usa o botão abaixo (só é preciso uma vez).');
+    const hz = khzToHz($('freq').value);
+    if (hz === null) return pMsg('Escreve a frequência acima para ver quem emite.');
+
+    const found = await procurar(hz, +$('pTol').value);
+    if (seq !== pesqSeq) return;
+    const ctx = contextoTempo();
+    const verUtil = $('pUtil').checked, soAtivas = $('pAtivas').checked;
+
+    let es = found.map(r => ({ r, util: isUtil(r), diff: r[0] - hz, on: ctx ? ativa(r, ctx.wd, ctx.t) : false }));
+    const ocultas = verUtil ? 0 : es.filter(e => e.util).length;
+    if (!verUtil) es = es.filter(e => !e.util);
+    const nAtivas = es.filter(e => e.on).length;
+    if (soAtivas && ctx) es = es.filter(e => e.on);
+    es.sort((a, b) => (b.on - a.on) || (a.util - b.util) || (Math.abs(a.diff) - Math.abs(b.diff)) || (a.r[4] - b.r[4]));
+
+    let m = es.length + (es.length === 1 ? ' emissão' : ' emissões');
+    if (ctx) m += ' · ' + nAtivas + ' ativa' + (nAtivas === 1 ? '' : 's') + ' às ' + ctx.h + 'z';
+    if (ocultas) m += ' · ' + ocultas + ' de dados/utilitárias ocultas';
+    pMsg(es.length ? m : 'Nada encontrado' + (ocultas ? ' (há ' + ocultas + ' de dados/utilitárias ocultas)' : '') + '.');
+
+    for (const e of (pesqTodas ? es : es.slice(0, MAX_HITS))){
+      const r = e.r;
+      const el = document.createElement('div');
+      el.className = 'hit' + (ctx ? (e.on ? ' on' : ' off') : '');
+      const h1 = document.createElement('div'); h1.className = 'h1';
+      h1.textContent = r[1] || '(sem nome)';
+      if (e.on){ const b = document.createElement('span'); b.className = 'badge'; b.textContent = 'ATIVA'; h1.appendChild(b); }
+      if (e.util){ const b = document.createElement('span'); b.className = 'badge u'; b.textContent = 'dados'; h1.appendChild(b); }
+      const h2 = document.createElement('div'); h2.className = 'h2';
+      const parts = [hhmm(r[4]) + '–' + hhmm(r[5]) + 'z', diasTxt(r[2]), r[3],
+        [r[6], r[7]].filter(Boolean).join(' → ')];
+      if (e.diff) parts.push((e.diff > 0 ? '+' : '') + (e.diff / 1000).toLocaleString('pt-PT') + ' kHz');
+      if (r[9]) parts.push(r[9] + ' kW');
+      if (r[8]) parts.push(r[8]);
+      h2.textContent = parts.filter(Boolean).join(' · ');
+      el.append(h1, h2);
+      el.onclick = () => {
+        $('estacao').value = r[1];
+        if (!e.util && r[3]) $('lingua').value = r[3];
+        toast(e.util ? 'Estação preenchida.' : 'Estação e língua preenchidas.');
+      };
+      box.appendChild(el);
+    }
+    if (!pesqTodas && es.length > MAX_HITS){
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'sec';
+      b.textContent = 'Mostrar todas (' + es.length + ')';
+      b.onclick = () => { pesqTodas = true; pesquisar(); };
+      box.appendChild(b);
+    }
+  } catch (err) {
+    pMsg('Erro na pesquisa: ' + (err && err.message || err));
+  }
+}
+
+async function importarEstacoes(file){
+  const btn = $('btnEst'), st = m => { $('pStatus').textContent = m; };
+  const tick = () => new Promise(r => setTimeout(r, 30));
+  btn.disabled = true;
+  try {
+    st('A ler o ficheiro…'); await tick();
+    const rows = parseCsv(await file.text());
+    if (rows.length < 2) throw new Error('ficheiro sem dados');
+    const head = rows[0].map(h => h.trim().toLowerCase());
+    const ix = k => head.indexOf(k);
+    const falta = ['freq_hz', 'station', 'start_time', 'end_time'].filter(k => ix(k) < 0);
+    if (falta.length) throw new Error('faltam colunas: ' + falta.join(', '));
+    const c = ['freq_hz', 'station', 'days', 'lang', 'start_time', 'end_time', 'itu', 'target', 'origin', 'power', 'remarks'].map(ix);
+    const g = (row, k) => k < 0 ? '' : (row[k] || '').trim();
+
+    st('A processar ' + (rows.length - 1).toLocaleString('pt-PT') + ' linhas…'); await tick();
+    const buckets = new Map();
+    let n = 0, skip = 0;
+    for (let k = 1; k < rows.length; k++){
+      const row = rows[k];
+      const hz = parseInt(g(row, c[0]), 10), a = normHora(g(row, c[4])), b = normHora(g(row, c[5]));
+      if (!(hz > 0) || a === null || b === null){ skip++; continue; }
+      const rec = [hz, g(row, c[1]), normDias(g(row, c[2])), g(row, c[3]), a, b,
+                   g(row, c[6]), g(row, c[7]), g(row, c[8]), g(row, c[9]), g(row, c[10])];
+      const key = Math.floor(hz / 1000);
+      let arr = buckets.get(key);
+      if (!arr) buckets.set(key, arr = []);
+      arr.push(rec); n++;
+    }
+    if (!n) throw new Error('nenhuma linha válida');
+
+    st('A guardar no telemóvel…'); await tick();
+    const d = await db();
+    await new Promise((res, rej) => {
+      const t = d.transaction([EST, META], 'readwrite');
+      const s = t.objectStore(EST);
+      s.clear();
+      for (const [key, arr] of buckets) s.put(arr, key);
+      t.objectStore(META).put({ n, ignoradas: skip, nome: file.name, quando: Date.now() }, 'info');
+      t.oncomplete = res;
+      t.onerror = t.onabort = () => rej(t.error);
+    });
+    pesqTodas = false;
+    await pesquisar();
+    toast(n.toLocaleString('pt-PT') + ' emissões importadas' + (skip ? ' (' + skip + ' ignoradas)' : '') + '.');
+  } catch (err) {
+    st('Falhou: ' + (err && err.message || err));
+    toast('Erro ao importar estações.', true);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+for (const id of ['freq', 'data', 'hora'])
+  $(id).addEventListener('input', () => { pesqTodas = false; agendarPesquisa(); });
+for (const id of ['pTol', 'pAtivas', 'pUtil'])
+  $(id).addEventListener('change', () => { pesqTodas = false; pesquisar(); });
+$('btnEst').onclick = () => $('fileEst').click();
+$('fileEst').onchange = e => { if (e.target.files[0]) importarEstacoes(e.target.files[0]); e.target.value = ''; };
 
 /* ---------- arranque ---------- */
 $('form').addEventListener('submit', onSubmit);

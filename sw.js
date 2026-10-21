@@ -1,6 +1,6 @@
 /* Service worker: guarda a app em cache para funcionar 100% offline.
    Ao alterar qualquer ficheiro da app, aumenta o número da versão abaixo. */
-const CACHE = 'escutas-v3';
+const CACHE = 'escutas-v4';
 const FILES = [
   './',
   './index.html',
