@@ -66,6 +66,14 @@
   .hit .h2{color:var(--mut);font-size:.82rem}
   .badge{font-size:.7rem;background:var(--ok);color:#04210f;border-radius:999px;padding:1px 8px;margin-left:6px;font-weight:700;vertical-align:1px}
   .badge.u{background:#3a4a63;color:var(--txt)}
+  .matwrap{overflow-x:auto}
+  .mat{border-collapse:separate;border-spacing:1px;font-size:.7rem}
+  .mat th{color:var(--mut);font-weight:400;padding:0 2px;white-space:nowrap}
+  .mat th.row{text-align:right;padding-right:6px;font-size:.72rem}
+  .mat td.c{width:9px;min-width:9px;height:20px;border-radius:2px;background:#0c1626;cursor:pointer;padding:0}
+  .mat td.c.z{cursor:default}
+  .mat td.sum{padding-left:6px;color:var(--mut);text-align:right}
+  .pesq input[type=search]{-webkit-appearance:none;appearance:none}
   #editbar{display:none;background:#3a2f0b;border:1px solid #b8922a;color:#ffe9a8;border-radius:10px;
     padding:8px 12px;margin-bottom:10px;font-size:.9rem}
 </style>
@@ -73,6 +81,23 @@
 <body>
 
 <h1>Log de Escutas <small id="count"></small></h1>
+
+<details class="pesq" id="pest" style="margin:0 0 12px">
+  <summary>Procurar estação (frequências e horas)</summary>
+  <div class="body">
+    <input id="sQuery" type="search" placeholder="ex.: BBC, Voice of Korea, Romania" autocomplete="off" style="margin-bottom:8px">
+    <div class="opts">
+      <label>Língua
+        <select id="sLing"><option value="">todas</option></select>
+      </label>
+      <label><input type="checkbox" id="sAtivas"> só ativas</label>
+      <label><input type="checkbox" id="sUtil"> incluir dados/utilitárias</label>
+    </div>
+    <div class="hint" id="sMsg" style="margin:0 0 6px"></div>
+    <div class="res" id="sRes"></div>
+    <div class="hint">Toca num resultado para preencher frequência, estação e língua no registo.</div>
+  </div>
+</details>
 
 <div id="editbar">A editar um registo existente.</div>
 
@@ -104,6 +129,9 @@
             <option value="1000" selected>±1 kHz</option>
             <option value="5000">±5 kHz</option>
           </select>
+        </label>
+        <label>Língua
+          <select id="pLing"><option value="">todas</option></select>
         </label>
         <label><input type="checkbox" id="pAtivas"> só ativas</label>
         <label><input type="checkbox" id="pUtil"> incluir dados/utilitárias</label>
@@ -180,6 +208,23 @@
 <h2>Registos</h2>
 <div class="list" id="list"></div>
 
+<details class="pesq" id="bandas" style="margin-top:14px">
+  <summary>Resumo por banda e hora (UTC)</summary>
+  <div class="body">
+    <div class="opts">
+      <label>Contar
+        <select id="bModo">
+          <option value="est">estações distintas</option>
+          <option value="esc">escutas</option>
+        </select>
+      </label>
+    </div>
+    <div class="matwrap" id="bMat"></div>
+    <div class="hint" id="bDet" style="margin:8px 0"></div>
+    <div id="bBest" style="font-size:.9rem"></div>
+  </div>
+</details>
+
 <h2>Exportar / cópia de segurança</h2>
 <div class="card">
   <div class="tools">
@@ -228,6 +273,7 @@ function setNow(){
   $('data').value = n.data;
   $('hora').value = n.hora;
   agendarPesquisa();
+  agendarNome();
 }
 
 function khzToHz(s){
@@ -248,16 +294,17 @@ function validDate(s){
 function validTime(s){ return /^([01]\d|2[0-3])[0-5]\d$/.test(s); }
 
 /* ---------- IndexedDB ---------- */
-const DB_NAME = 'log_escutas', STORE = 'escutas', EST = 'estacoes', META = 'meta';
+const DB_NAME = 'log_escutas', STORE = 'escutas', EST = 'estacoes', META = 'meta', NOMES = 'nomes';
 let dbp;
 function db(){
   if (!dbp) dbp = new Promise((res, rej) => {
-    const r = indexedDB.open(DB_NAME, 2);
+    const r = indexedDB.open(DB_NAME, 3);
     r.onupgradeneeded = () => {
       const d = r.result;
       if (!d.objectStoreNames.contains(STORE)) d.createObjectStore(STORE, { keyPath: 'id', autoIncrement: true });
       if (!d.objectStoreNames.contains(EST)) d.createObjectStore(EST);
       if (!d.objectStoreNames.contains(META)) d.createObjectStore(META);
+      if (!d.objectStoreNames.contains(NOMES)) d.createObjectStore(NOMES);
     };
     r.onsuccess = () => res(r.result);
     r.onerror = () => rej(r.error);
@@ -391,6 +438,7 @@ async function onSubmit(e){
 async function render(){
   const recs = sortRecs(await dbAll()).reverse();
   $('count').textContent = recs.length + (recs.length === 1 ? ' registo' : ' registos');
+  if ($('bandas').open) resumoBandas();
   const list = $('list');
   list.textContent = '';
   if (!recs.length){
@@ -465,14 +513,85 @@ async function importar(file){
   }
 }
 
-/* ---------- pesquisa por frequência (base de estações) ----------
+/* ---------- línguas: 4 fontes, 4 convenções (nomes, códigos EiBi, ISO 639-3, truncados) ---------- */
+const LING_TAB = [
+  'English: english, eng, en, e', 'Mandarin: mandarin, chinese, zho, cmn, chn, zh, m',
+  'Cantonese: cantonese, yue, ca', 'Spanish: spanish, spa, es, s', 'French: french, fra, fre, fr, f',
+  'German: german, deu, ger, de, d', 'Portuguese: portuguese, por, pt, p', 'Italian: italian, ita, it, i',
+  'Russian: russian, rus, ru, r', 'Japanese: japanese, jpn, j', 'Korean: korean, kor, k',
+  'Arabic: arabic, ara, arb, a', 'Hindi: hindi, hin, hi', 'Urdu: urdu, urd, ur',
+  'Bengali: bengali, bengal, ben, be', 'Tamil: tamil, tam', 'Persian: persian, farsi, fas, per, fs',
+  'Dari: dari, prs, dr', 'Pashto: pashto, pus, pst, ps', 'Turkish: turkish, tur, tu',
+  'Vietnamese: vietnamese, vie, vn', 'Thai: thai, tha, t', 'Indonesian: indonesian, ind, in',
+  'Dutch: dutch, nld, dut, nl', 'Romanian: romanian, ron, rum, ro', 'Somali: somali, som, so',
+  'Swahili: swahili, swa', 'Hausa: hausa, hau, ha', 'Amharic: amharic, amh, ah',
+  'Tigrinya: tigrinya, tir, tig', 'Oromo: oromo, orm, oo', 'Burmese: burmese, myanmar, mya, bur, br',
+  'Khmer: khmer, khm, kh', 'Lao: lao, laotian', 'Nepali: nepali, nepalese, nep, ne',
+  'Tagalog: tagalog, filipino, tgl, fil, tag', 'Kazakh: kazakh, kaz, kz', 'Mongolian: mongolian, mon, mo',
+  'Tibetan: tibetan, bod, tib, tb', 'Uyghur: uyghur, uighur, uig, ui', 'Amoy: amoy, nan, am',
+  'Hakka: hakka, hak, hk', 'Ukrainian: ukrainian, ukr, uk', 'Polish: polish, pol, po',
+  'Croatian: croatian, hrv, hr', 'Serbian: serbian, srp, sr', 'Bulgarian: bulgarian, bul, bu',
+  'Greek: greek, ell, gre, gr', 'Finnish: finnish, fin, fi', 'Norwegian: norwegian, nor, no',
+  'Armenian: armenian, hye, ar', 'Tajik: tajik, tgk, tj', 'Esperanto: esperanto, epo, eo',
+  'Hungarian: hungarian, hun', 'Hebrew: hebrew, heb', 'Swedish: swedish, swe', 'Czech: czech, ces, cze',
+  'Albanian: albanian, sqi, alb', 'Azeri: azeri, aze', 'Uzbek: uzbek, uzb', 'Punjabi: punjabi, pan',
+  'Malay: malay, msa, may', 'Javanese: javanese, jav', 'Quechua: quechua, que, q',
+  'Georgian: georgian, kat, geo', 'Kyrgyz: kyrgyz, kir', 'Turkmen: turkmen, tuk', 'Yoruba: yoruba, yor',
+  'Zulu: zulu, zul', 'Afrikaans: afrikaans, afr', 'Lithuanian: lithuanian, lit', 'Latvian: latvian, lav',
+  'Estonian: estonian, est', 'Slovak: slovak, slk', 'Slovenian: slovenian, slv', 'Macedonian: macedonian, mkd',
+  'Bosnian: bosnian, bos', 'Sinhala: sinhala, sin', 'Pashai: pashai'
+];
+const LING_MAP = new Map();
+for (const ln of LING_TAB){
+  const i = ln.indexOf(': ');
+  for (const a of ln.slice(i + 2).split(', ')) LING_MAP.set(a, ln.slice(0, i));
+}
+const LING_IGN = new Set(['various', 'dialects', 'dialect', 'mul', 'und', 'music', 'unknown', 'other', 'others',
+  'mixed', 'digital', 'silence', 'beacon']);
+const lingCache = new Map();
+
+function linguasDe(raw){
+  raw = String(raw || '');
+  if (lingCache.has(raw)) return lingCache.get(raw);
+  const out = [], u = raw.trim().toUpperCase();
+  if (!(u.startsWith('DATA') || u.startsWith('-') || u.startsWith('TIME SIGNAL'))){
+    for (let t of raw.split(/[\/,;+&]/)){
+      t = t.replace(/\s*\(.*$/, '').replace(/\.+$/, '').replace(/^drm\s+/i, '').trim().toLowerCase();
+      if (!t || LING_IGN.has(t)) continue;
+      let nome = LING_MAP.get(t);
+      if (!nome && t.length >= 3){                       // valor truncado: "Span", "Tigr", "Myan"
+        const c = new Set();
+        for (const [a, n] of LING_MAP) if (a.length >= 4 && a.startsWith(t)) c.add(n);
+        if (c.size === 1) nome = [...c][0];
+      }
+      if (!nome){
+        if (!/^[a-z]{3,}/.test(t)) continue;
+        nome = t.charAt(0).toUpperCase() + t.slice(1);
+      }
+      if (!out.includes(nome)) out.push(nome);
+    }
+  }
+  lingCache.set(raw, out);
+  return out;
+}
+function linguaTxt(raw){
+  const l = linguasDe(raw);
+  if (!l.length) return String(raw || '');
+  return l.join('/') + (/drm|digital/i.test(raw) ? ' (DRM)' : '');
+}
+
+/* ---------- pesquisa por frequência / por estação (base de estações) ----------
    Registo compacto: [0 freq_hz, 1 estação, 2 dias, 3 língua, 4 início(min), 5 fim(min),
                       6 itu, 7 target, 8 origem, 9 potência, 10 remarks]
-   Guardado em baldes de 1 kHz (chave = floor(freq_hz/1000)). */
+   Guardado em baldes de 1 kHz (EST) e agrupado por nome normalizado (NOMES). */
 const DIAS = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom'];
-const MAX_HITS = 25;
-let tPesq, pesqSeq = 0, pesqTodas = false;
+const MAX_HITS = 25, MAX_NOMES = 300;
+let tPesq, tNome, pesqSeq = 0, nomeSeq = 0, pesqTodas = false, nomeTodas = false, nomesCache = null;
 
+function normNome(s){
+  return String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ').trim();
+}
 function normHora(s){
   s = String(s || '').trim();
   if (!/^\d{1,4}$/.test(s)) return null;
@@ -495,6 +614,20 @@ function ativa(r, wd, t){
   if (s < e) return t >= s && t < e && diaOk(dias, wd);
   if (t >= s) return diaOk(dias, wd);                       // até à meia-noite
   return t < e && diaOk(dias, wd === 1 ? 7 : wd - 1);       // depois da meia-noite: dia anterior
+}
+function minAteInicio(r, wd, t){                              // minutos até à próxima emissão (até 7 dias)
+  for (let d = 0; d <= 7; d++){
+    const dia = (wd - 1 + d) % 7 + 1;
+    if (!diaOk(r[2], dia)) continue;
+    const m = d * 1440 + r[4] - t;
+    if (m > 0) return m;
+  }
+  return Infinity;
+}
+function fmtEspera(m){
+  if (m < 60) return m + ' min';
+  if (m < 1440) return Math.floor(m / 60) + 'h' + String(m % 60).padStart(2, '0');
+  return Math.floor(m / 1440) + ' d';
 }
 function diasTxt(d){
   if (d === '' || d === '1234567') return 'diário';
@@ -519,6 +652,73 @@ function contextoTempo(){
   const dt = new Date(Date.UTC(+d.slice(0, 4), +d.slice(4, 6) - 1, +d.slice(6, 8)));
   return { wd: (dt.getUTCDay() + 6) % 7 + 1, t: +h.slice(0, 2) * 60 + +h.slice(2), h };
 }
+const fmtKhz = hz => String(hz / 1000);
+
+function entradas(rows, ctx, hz){
+  return rows.map(r => ({
+    r, util: isUtil(r), diff: hz === undefined ? 0 : r[0] - hz,
+    on: ctx ? ativa(r, ctx.wd, ctx.t) : false,
+    prox: ctx ? minAteInicio(r, ctx.wd, ctx.t) : Infinity
+  }));
+}
+
+/* preenche o seletor de línguas com o que existe nos resultados e aplica o filtro */
+function aplicarLing(es, sel){
+  const cnt = new Map();
+  for (const e of es) for (const l of linguasDe(e.r[3])) cnt.set(l, (cnt.get(l) || 0) + 1);
+  const atual = sel.value;
+  const ops = [...cnt].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  const sig = ops.map(o => o[0] + ':' + o[1]).join('|');
+  if (sel.dataset.sig !== sig){
+    sel.textContent = '';
+    sel.appendChild(new Option('todas', ''));
+    for (const [n, c] of ops) sel.appendChild(new Option(n + ' (' + c + ')', n));
+    sel.dataset.sig = sig;
+    sel.value = cnt.has(atual) ? atual : '';
+  }
+  return sel.value ? es.filter(e => linguasDe(e.r[3]).includes(sel.value)) : es;
+}
+
+function criarHit(e, ctx, modo){
+  const r = e.r;
+  const el = document.createElement('div');
+  el.className = 'hit' + (ctx ? (e.on ? ' on' : ' off') : '');
+  const h1 = document.createElement('div'); h1.className = 'h1';
+  h1.textContent = modo === 'nome' ? fmtKhz(r[0]) + ' kHz · ' + (r[1] || '(sem nome)') : (r[1] || '(sem nome)');
+  if (e.on){ const b = document.createElement('span'); b.className = 'badge'; b.textContent = 'ATIVA'; h1.appendChild(b); }
+  if (e.util){ const b = document.createElement('span'); b.className = 'badge u'; b.textContent = 'dados'; h1.appendChild(b); }
+  const h2 = document.createElement('div'); h2.className = 'h2';
+  const parts = [hhmm(r[4]) + '–' + hhmm(r[5]) + 'z', diasTxt(r[2]), linguaTxt(r[3]),
+    [r[6], r[7]].filter(Boolean).join(' → ')];
+  if (modo === 'nome' && ctx && !e.on && isFinite(e.prox)) parts.push('começa daqui a ' + fmtEspera(e.prox));
+  if (modo !== 'nome' && e.diff) parts.push((e.diff > 0 ? '+' : '') + (e.diff / 1000).toLocaleString('pt-PT') + ' kHz');
+  if (r[9]) parts.push(r[9] + ' kW');
+  if (r[8]) parts.push(r[8]);
+  h2.textContent = parts.filter(Boolean).join(' · ');
+  el.append(h1, h2);
+  el.onclick = () => {
+    if (modo === 'nome'){ $('freq').value = fmtKhz(r[0]); agendarPesquisa(); }
+    $('estacao').value = r[1];
+    const l = e.util ? '' : linguaTxt(r[3]);
+    if (l) $('lingua').value = l;
+    toast(modo === 'nome' ? 'Frequência, estação e língua preenchidas.'
+                          : (l ? 'Estação e língua preenchidas.' : 'Estação preenchida.'));
+    if (modo === 'nome') window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+  return el;
+}
+
+function desenharLista(box, es, ctx, modo, todas, aoMostrarTodas){
+  box.textContent = '';
+  for (const e of (todas ? es : es.slice(0, MAX_HITS))) box.appendChild(criarHit(e, ctx, modo));
+  if (!todas && es.length > MAX_HITS){
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'sec';
+    b.textContent = 'Mostrar todas (' + es.length + ')';
+    b.onclick = aoMostrarTodas;
+    box.appendChild(b);
+  }
+}
 
 async function procurar(hz, tol){
   const d = await db();
@@ -531,7 +731,6 @@ async function procurar(hz, tol){
 }
 
 function agendarPesquisa(){ clearTimeout(tPesq); tPesq = setTimeout(pesquisar, 150); }
-
 function pMsg(t){ $('pMsg').textContent = t; }
 
 async function pesquisar(){
@@ -553,9 +752,10 @@ async function pesquisar(){
     const ctx = contextoTempo();
     const verUtil = $('pUtil').checked, soAtivas = $('pAtivas').checked;
 
-    let es = found.map(r => ({ r, util: isUtil(r), diff: r[0] - hz, on: ctx ? ativa(r, ctx.wd, ctx.t) : false }));
+    let es = entradas(found, ctx, hz);
     const ocultas = verUtil ? 0 : es.filter(e => e.util).length;
     if (!verUtil) es = es.filter(e => !e.util);
+    es = aplicarLing(es, $('pLing'));
     const nAtivas = es.filter(e => e.on).length;
     if (soAtivas && ctx) es = es.filter(e => e.on);
     es.sort((a, b) => (b.on - a.on) || (a.util - b.util) || (Math.abs(a.diff) - Math.abs(b.diff)) || (a.r[4] - b.r[4]));
@@ -564,42 +764,75 @@ async function pesquisar(){
     if (ctx) m += ' · ' + nAtivas + ' ativa' + (nAtivas === 1 ? '' : 's') + ' às ' + ctx.h + 'z';
     if (ocultas) m += ' · ' + ocultas + ' de dados/utilitárias ocultas';
     pMsg(es.length ? m : 'Nada encontrado' + (ocultas ? ' (há ' + ocultas + ' de dados/utilitárias ocultas)' : '') + '.');
-
-    for (const e of (pesqTodas ? es : es.slice(0, MAX_HITS))){
-      const r = e.r;
-      const el = document.createElement('div');
-      el.className = 'hit' + (ctx ? (e.on ? ' on' : ' off') : '');
-      const h1 = document.createElement('div'); h1.className = 'h1';
-      h1.textContent = r[1] || '(sem nome)';
-      if (e.on){ const b = document.createElement('span'); b.className = 'badge'; b.textContent = 'ATIVA'; h1.appendChild(b); }
-      if (e.util){ const b = document.createElement('span'); b.className = 'badge u'; b.textContent = 'dados'; h1.appendChild(b); }
-      const h2 = document.createElement('div'); h2.className = 'h2';
-      const parts = [hhmm(r[4]) + '–' + hhmm(r[5]) + 'z', diasTxt(r[2]), r[3],
-        [r[6], r[7]].filter(Boolean).join(' → ')];
-      if (e.diff) parts.push((e.diff > 0 ? '+' : '') + (e.diff / 1000).toLocaleString('pt-PT') + ' kHz');
-      if (r[9]) parts.push(r[9] + ' kW');
-      if (r[8]) parts.push(r[8]);
-      h2.textContent = parts.filter(Boolean).join(' · ');
-      el.append(h1, h2);
-      el.onclick = () => {
-        $('estacao').value = r[1];
-        if (!e.util && r[3]) $('lingua').value = r[3];
-        toast(e.util ? 'Estação preenchida.' : 'Estação e língua preenchidas.');
-      };
-      box.appendChild(el);
-    }
-    if (!pesqTodas && es.length > MAX_HITS){
-      const b = document.createElement('button');
-      b.type = 'button'; b.className = 'sec';
-      b.textContent = 'Mostrar todas (' + es.length + ')';
-      b.onclick = () => { pesqTodas = true; pesquisar(); };
-      box.appendChild(b);
-    }
+    desenharLista(box, es, ctx, 'freq', pesqTodas, () => { pesqTodas = true; pesquisar(); });
   } catch (err) {
     pMsg('Erro na pesquisa: ' + (err && err.message || err));
   }
 }
 
+/* ---------- pesquisa por estação ---------- */
+async function chavesNomes(){
+  if (nomesCache) return nomesCache;
+  const d = await db();
+  nomesCache = await new Promise((res, rej) => {
+    const rq = d.transaction(NOMES, 'readonly').objectStore(NOMES).getAllKeys();
+    rq.onsuccess = () => res(rq.result);
+    rq.onerror = () => rej(rq.error);
+  });
+  return nomesCache;
+}
+async function linhasDeNomes(keys){
+  const d = await db();
+  return new Promise((res, rej) => {
+    const t = d.transaction(NOMES, 'readonly'), s = t.objectStore(NOMES), out = [];
+    for (const k of keys) s.get(k).onsuccess = ev => { if (ev.target.result) for (const r of ev.target.result) out.push(r); };
+    t.oncomplete = () => res(out);
+    t.onerror = () => rej(t.error);
+  });
+}
+
+function agendarNome(){ clearTimeout(tNome); tNome = setTimeout(pesquisarNome, 250); }
+function sMsg(t){ $('sMsg').textContent = t; }
+
+async function pesquisarNome(){
+  if (!$('pest').open) return;
+  const seq = ++nomeSeq, box = $('sRes');
+  try {
+    const meta = await tx('readonly', s => s.get('info'), META);
+    if (seq !== nomeSeq) return;
+    box.textContent = '';
+    if (!meta) return sMsg('Primeiro importa o ficheiro de estações (painel "Quem emite nesta frequência?").');
+    if (!meta.v || meta.v < 2) return sMsg('Volta a importar o ficheiro de estações para ativar esta pesquisa.');
+    const q = normNome($('sQuery').value);
+    if (q.length < 2) return sMsg('Escreve pelo menos 2 letras do nome da estação.');
+    const tokens = q.split(' ');
+    const keys = (await chavesNomes()).filter(k => tokens.every(t => k.includes(t)));
+    if (!keys.length) return sMsg('Nenhuma estação com esse nome.');
+    const rows = await linhasDeNomes(keys.slice(0, MAX_NOMES));
+    if (seq !== nomeSeq) return;
+    const ctx = contextoTempo();
+    const verUtil = $('sUtil').checked, soAtivas = $('sAtivas').checked;
+
+    let es = entradas(rows, ctx);
+    const ocultas = verUtil ? 0 : es.filter(e => e.util).length;
+    if (!verUtil) es = es.filter(e => !e.util);
+    es = aplicarLing(es, $('sLing'));
+    const nAtivas = es.filter(e => e.on).length;
+    if (soAtivas && ctx) es = es.filter(e => e.on);
+    es.sort((a, b) => (b.on - a.on) || (a.prox - b.prox) || (a.r[0] - b.r[0]) || (a.r[4] - b.r[4]));
+
+    let m = es.length + (es.length === 1 ? ' emissão' : ' emissões') + ' (' + keys.length + (keys.length === 1 ? ' nome' : ' nomes') + ')';
+    if (ctx) m += ' · ' + nAtivas + ' ativa' + (nAtivas === 1 ? '' : 's') + ' às ' + ctx.h + 'z';
+    if (ocultas) m += ' · ' + ocultas + ' de dados/utilitárias ocultas';
+    if (keys.length > MAX_NOMES) m += ' · só os primeiros ' + MAX_NOMES + ' nomes; escreve mais letras';
+    sMsg(es.length ? m : 'Nada encontrado' + (ocultas ? ' (há ' + ocultas + ' de dados/utilitárias ocultas)' : '') + '.');
+    desenharLista(box, es, ctx, 'nome', nomeTodas, () => { nomeTodas = true; pesquisarNome(); });
+  } catch (err) {
+    sMsg('Erro na pesquisa: ' + (err && err.message || err));
+  }
+}
+
+/* ---------- importação do ficheiro de estações ---------- */
 async function importarEstacoes(file){
   const btn = $('btnEst'), st = m => { $('pStatus').textContent = m; };
   const tick = () => new Promise(r => setTimeout(r, 30));
@@ -616,7 +849,7 @@ async function importarEstacoes(file){
     const g = (row, k) => k < 0 ? '' : (row[k] || '').trim();
 
     st('A processar ' + (rows.length - 1).toLocaleString('pt-PT') + ' linhas…'); await tick();
-    const buckets = new Map();
+    const buckets = new Map(), nomes = new Map();
     let n = 0, skip = 0;
     for (let k = 1; k < rows.length; k++){
       const row = rows[k];
@@ -627,23 +860,31 @@ async function importarEstacoes(file){
       const key = Math.floor(hz / 1000);
       let arr = buckets.get(key);
       if (!arr) buckets.set(key, arr = []);
-      arr.push(rec); n++;
+      arr.push(rec);
+      const nk = normNome(rec[1]);
+      if (nk){
+        let na = nomes.get(nk);
+        if (!na) nomes.set(nk, na = []);
+        na.push(rec);
+      }
+      n++;
     }
     if (!n) throw new Error('nenhuma linha válida');
 
-    st('A guardar no telemóvel…'); await tick();
+    st('A guardar no telemóvel (pode demorar um pouco)…'); await tick();
     const d = await db();
     await new Promise((res, rej) => {
-      const t = d.transaction([EST, META], 'readwrite');
-      const s = t.objectStore(EST);
-      s.clear();
+      const t = d.transaction([EST, NOMES, META], 'readwrite');
+      const s = t.objectStore(EST), sn = t.objectStore(NOMES);
+      s.clear(); sn.clear();
       for (const [key, arr] of buckets) s.put(arr, key);
-      t.objectStore(META).put({ n, ignoradas: skip, nome: file.name, quando: Date.now() }, 'info');
+      for (const [key, arr] of nomes) sn.put(arr, key);
+      t.objectStore(META).put({ v: 2, n, ignoradas: skip, nome: file.name, quando: Date.now() }, 'info');
       t.oncomplete = res;
       t.onerror = t.onabort = () => rej(t.error);
     });
-    pesqTodas = false;
-    await pesquisar();
+    nomesCache = null; pesqTodas = nomeTodas = false;
+    await pesquisar(); pesquisarNome();
     toast(n.toLocaleString('pt-PT') + ' emissões importadas' + (skip ? ' (' + skip + ' ignoradas)' : '') + '.');
   } catch (err) {
     st('Falhou: ' + (err && err.message || err));
@@ -653,10 +894,115 @@ async function importarEstacoes(file){
   }
 }
 
+/* ---------- resumo por banda e hora (a partir das escutas registadas) ---------- */
+const BANDAS = [
+  ['160 m (amador)', 1800, 2000], ['120 m', 2300, 2495], ['80 m (amador)', 3500, 3800], ['90 m', 3200, 3400],
+  ['75 m', 3900, 4000], ['60 m', 4750, 5060], ['49 m', 5730, 6295], ['40 m (amador)', 7000, 7200],
+  ['41 m', 7200, 7600], ['31 m', 9400, 9995], ['30 m (amador)', 10100, 10150], ['25 m', 11600, 12100],
+  ['22 m', 13570, 13870], ['20 m (amador)', 14000, 14350], ['19 m', 15100, 15800], ['16 m', 17480, 17900],
+  ['17 m (amador)', 18068, 18168], ['15 m', 18900, 19020], ['15 m (amador)', 21000, 21450], ['13 m', 21450, 21850],
+  ['12 m (amador)', 24890, 24990], ['11 m', 25670, 26100], ['10 m (amador)', 28000, 29700]
+].sort((a, b) => a[1] - b[1]);
+function bandaDe(hz){
+  const k = hz / 1000;
+  for (const b of BANDAS) if (k >= b[1] && k <= b[2]) return b[0];
+  return 'Outras';
+}
+function faixasHoras(cont){                                   // horas com pelo menos 60% do máximo da banda
+  const max = Math.max(...cont);
+  if (!max) return '';
+  const lim = Math.max(1, max * 0.6), runs = [];
+  let ini = null;
+  for (let h = 0; h < 24; h++){
+    if (cont[h] >= lim){ if (ini === null) ini = h; }
+    else if (ini !== null){ runs.push([ini, h - 1]); ini = null; }
+  }
+  if (ini !== null) runs.push([ini, 23]);
+  if (runs.length > 1 && runs[0][0] === 0 && runs[runs.length - 1][1] === 23){
+    const u = runs.pop(); runs[0] = [u[0], runs[0][1]];
+  }
+  const p = x => String(x).padStart(2, '0') + 'h';
+  return runs.map(([a, b]) => a === b ? p(a) : p(a) + '–' + p(b)).join(', ');
+}
+
+async function resumoBandas(){
+  const mat = $('bMat'), det = $('bDet'), best = $('bBest');
+  const recs = await dbAll();
+  const porEst = $('bModo').value === 'est';
+  const por = new Map();
+  for (const r of recs){
+    if (!validTime(r.hora || '') || !(r.freq_hz > 0)) continue;
+    const b = bandaDe(r.freq_hz), h = +r.hora.slice(0, 2);
+    if (!por.has(b)) por.set(b, Array.from({ length: 24 }, () => []));
+    por.get(b)[h].push(r);
+  }
+  mat.textContent = ''; det.textContent = ''; best.textContent = '';
+  if (!por.size){ det.textContent = 'Ainda sem escutas para resumir.'; return; }
+  const valor = lst => porEst
+    ? new Set(lst.map(r => normNome(r.estacao) || ('f' + r.freq_hz))).size
+    : lst.length;
+  const ordem = [...BANDAS.map(b => b[0]), 'Outras'].filter((b, i, a) => por.has(b) && a.indexOf(b) === i);
+
+  const tb = document.createElement('table'); tb.className = 'mat';
+  const hr = tb.insertRow();
+  hr.appendChild(document.createElement('th'));
+  for (let h = 0; h < 24; h += 3){
+    const th = document.createElement('th'); th.colSpan = 3; th.textContent = h + 'h'; th.style.textAlign = 'left';
+    hr.appendChild(th);
+  }
+  hr.appendChild(document.createElement('th')).textContent = 'Σ';
+  for (const b of ordem){
+    const dias = por.get(b), cont = dias.map(valor), max = Math.max(...cont);
+    const tr = tb.insertRow();
+    const th = document.createElement('th'); th.className = 'row'; th.dataset.banda = b;
+    const [base, sub] = b.split(' (');
+    th.textContent = base;
+    if (sub){
+      const sm = document.createElement('small');
+      sm.style.cssText = 'display:block;font-size:.6rem;opacity:.8';
+      sm.textContent = sub.replace(')', '');
+      th.appendChild(sm);
+    }
+    tr.appendChild(th);
+    for (let h = 0; h < 24; h++){
+      const td = tr.insertCell(); td.className = 'c';
+      if (cont[h]){
+        td.style.background = 'rgba(63,182,255,' + (0.2 + 0.8 * cont[h] / max).toFixed(2) + ')';
+        td.title = b + ' · ' + String(h).padStart(2, '0') + 'h: ' + cont[h];
+        td.onclick = () => {
+          const nomes = [...new Set(dias[h].map(r => (r.estacao || '').trim() || (r.freq_hz / 1000) + ' kHz'))];
+          det.textContent = b + ' · ' + String(h).padStart(2, '0') + 'h UTC: ' + cont[h] +
+            (porEst ? (cont[h] === 1 ? ' estação' : ' estações') : (cont[h] === 1 ? ' escuta' : ' escutas')) +
+            ' — ' + nomes.slice(0, 12).join(', ') + (nomes.length > 12 ? '…' : '');
+        };
+      } else td.classList.add('z');
+    }
+    const sum = tr.insertCell(); sum.className = 'sum';
+    sum.textContent = porEst ? valor(dias.flat()) : dias.flat().length;
+  }
+  mat.appendChild(tb);
+  det.textContent = 'Toca numa célula para ver as estações. A intensidade é relativa dentro de cada banda.';
+  for (const b of ordem){
+    const f = faixasHoras(por.get(b).map(valor));
+    const d = document.createElement('div');
+    d.textContent = b + ': ' + (f || '—');
+    best.appendChild(d);
+  }
+  const cab = document.createElement('div'); cab.className = 'hint'; cab.style.marginTop = '6px';
+  cab.textContent = 'Melhores horas (UTC, hora inteira) por banda:';
+  best.prepend(cab);
+}
+
 for (const id of ['freq', 'data', 'hora'])
-  $(id).addEventListener('input', () => { pesqTodas = false; agendarPesquisa(); });
-for (const id of ['pTol', 'pAtivas', 'pUtil'])
+  $(id).addEventListener('input', () => { pesqTodas = nomeTodas = false; agendarPesquisa(); agendarNome(); });
+for (const id of ['pTol', 'pAtivas', 'pUtil', 'pLing'])
   $(id).addEventListener('change', () => { pesqTodas = false; pesquisar(); });
+for (const id of ['sAtivas', 'sUtil', 'sLing'])
+  $(id).addEventListener('change', () => { nomeTodas = false; pesquisarNome(); });
+$('sQuery').addEventListener('input', () => { nomeTodas = false; $('sLing').value = ''; agendarNome(); });
+$('pest').addEventListener('toggle', () => { if ($('pest').open) pesquisarNome(); });
+$('bandas').addEventListener('toggle', () => { if ($('bandas').open) resumoBandas(); });
+$('bModo').addEventListener('change', resumoBandas);
 $('btnEst').onclick = () => $('fileEst').click();
 $('fileEst').onchange = e => { if (e.target.files[0]) importarEstacoes(e.target.files[0]); e.target.value = ''; };
 
