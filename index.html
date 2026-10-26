@@ -690,6 +690,7 @@ function criarHit(e, ctx, modo){
   const h2 = document.createElement('div'); h2.className = 'h2';
   const parts = [hhmm(r[4]) + '–' + hhmm(r[5]) + 'z', diasTxt(r[2]), linguaTxt(r[3]),
     [r[6], r[7]].filter(Boolean).join(' → ')];
+  if (modo !== 'nome') parts.unshift(fmtKhz(r[0]).replace('.', ',') + ' kHz');   // 1.º campo: frequência da emissão
   if (modo === 'nome' && ctx && !e.on && isFinite(e.prox)) parts.push('começa daqui a ' + fmtEspera(e.prox));
   if (modo !== 'nome' && e.diff) parts.push((e.diff > 0 ? '+' : '') + (e.diff / 1000).toLocaleString('pt-PT') + ' kHz');
   if (r[9]) parts.push(r[9] + ' kW');
